@@ -22,17 +22,59 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Extract project ZIP
+      - name: Extract project
         run: |
           mkdir unpacked
-          unzip -q LeanLife_Android_Project_With_Build_Workflow.zip -d unpacked
+          ZIP=$(find . -maxdepth 1 -name '*.zip' -print -quit)
+          if [ -z "$ZIP" ]; then
+            echo "ZIP archive not found"
+            exit 1
+          fi
+          unzip -q "$ZIP" -d unpacked
+          PROJECT_DIR=$(dirname "$(find unpacked -name settings.gradle.kts -print -quit)")
+          if [ ! -f "$PROJECT_DIR/app/build.gradle.kts" ]; then
+            echo "App Gradle file not found"
+            exit 1
+          fi
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Fix Java and Kotlin versions
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          p = Path(os.environ["PROJECT_DIR"]) / "app/build.gradle.kts"
+          s = p.read_text()
+          if "compileOptions {" not in s:
+              s = s.replace(
+                  "android {",
+                  """android {
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }""",
+                  1
+              )
+          else:
+              import re
+              s = re.sub(
+                  r"compileOptions\s*\{.*?\}",
+                  """compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }""",
+                  s,
+                  count=1,
+                  flags=re.S
+              )
+          p.write_text(s)
+          PY
 
       - name: Build APK
-        working-directory: unpacked/LeanLife
-        run: gradle --no-daemon assembleDebug
+        run: gradle --no-daemon -p "$PROJECT_DIR" assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: LeanLife-debug-apk
-          path: unpacked/LeanLife/app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ env.PROJECT_DIR }}/app/build/outputs/apk/debug/app-debug.apk
